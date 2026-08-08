@@ -1,0 +1,6 @@
+{
+  "name": "Family Guardian",
+  "description": "Family safety, real-time location tracking, geofencing, movement history, and emergency SOS alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
