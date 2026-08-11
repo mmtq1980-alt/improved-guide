@@ -3,11 +3,28 @@ package com.example.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.*
+import com.example.data.EventEntity
+import com.example.data.EventSeverity
+import com.example.data.EventLogEntity
+import com.example.data.FamilyGuardianDatabase
+import com.example.data.FamilyGuardianRepository
+import com.example.data.FamilyRole
+import com.example.data.PlaceEntity
+import com.example.data.PlaceType
+import com.example.data.TripEntity
+import com.example.data.UserEntity
+import com.example.data.UserSettingsEntity
+import com.example.data.LocationHistoryEntity
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -16,23 +33,32 @@ class FamilyGuardianViewModel(
     application: Application
 ) : AndroidViewModel(application) {
 
-    private val db = FamilyGuardianDatabase.getDatabase(application)
-    private val repository = FamilyGuardianRepository(db.dao())
+    // ============================================================
+    // DATABASE
+    // ============================================================
+
+    private val db =
+        FamilyGuardianDatabase.getDatabase(application)
+
+    private val repository =
+        FamilyGuardianRepository(db.dao())
 
     // ============================================================
     // FAMILY
     // ============================================================
 
     val familyMembers: StateFlow<List<UserEntity>> =
-        repository.getFamilyMembers()
+        repository
+            .getFamilyMembers()
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
                 emptyList()
             )
 
-    val currentFamily: StateFlow<FamilyEntity?> =
-        repository.getFamily()
+    val currentFamily: StateFlow<com.example.data.FamilyEntity?> =
+        repository
+            .getFamily()
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
@@ -40,7 +66,8 @@ class FamilyGuardianViewModel(
             )
 
     val currentUser: StateFlow<UserEntity?> =
-        repository.getUser()
+        repository
+            .getUser()
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5000),
@@ -48,16 +75,83 @@ class FamilyGuardianViewModel(
             )
 
     // ============================================================
-    // MEMBER SELECTION
+    // PLACES
     // ============================================================
 
+    val places: StateFlow<List<PlaceEntity>> =
+        repository
+            .getPlaces()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                emptyList()
+            )
+
+    // ============================================================
+    // EVENTS
+    // ============================================================
+
+    val eventLogs: StateFlow<List<EventLogEntity>> =
+        repository
+            .getEventLogs()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                emptyList()
+            )
+
+    // ============================================================
+    // TRIPS
+    // ============================================================
+
+    val activeTrip: StateFlow<TripEntity?> =
+        repository
+            .getActiveTrip()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                null
+            )
+
+    val allTrips: StateFlow<List<TripEntity>> =
+        repository
+            .getAllTrips()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                emptyList()
+            )
+
+    // ============================================================
+    // SETTINGS
+    // ============================================================
+
+    val userSettings: StateFlow<UserSettingsEntity?> =
+        repository
+            .getUserSettings()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                null
+            )
+
+    // ============================================================
+    // SELECTED FAMILY MEMBER
+    // ============================================================
+
+    /**
+     * لا نحدد usr_003 تلقائياً بعد الآن.
+     *
+     * المستخدم سيختار فرد العائلة بنفسه.
+     */
     private val _selectedMemberId =
         MutableStateFlow<String?>(null)
 
     val selectedMemberId: StateFlow<String?> =
         _selectedMemberId.asStateFlow()
 
-    val selectedMemberHistory: StateFlow<List<LocationHistoryEntity>> =
+    val selectedMemberHistory:
+        StateFlow<List<LocationHistoryEntity>> =
         _selectedMemberId
             .flatMapLatest { id ->
                 if (id != null) {
@@ -73,7 +167,7 @@ class FamilyGuardianViewModel(
             )
 
     // ============================================================
-    // NAVIGATION
+    // TABS
     // ============================================================
 
     private val _selectedTab =
@@ -81,231 +175,6 @@ class FamilyGuardianViewModel(
 
     val selectedTab: StateFlow<Int> =
         _selectedTab.asStateFlow()
-
-    fun setTab(index: Int) {
-        _selectedTab.value = index
-    }
-
-    fun selectMember(memberId: String) {
-        _selectedMemberId.value = memberId
-    }
-
-    // ============================================================
-    // ADD MEMBER
-    // ============================================================
-
-    private val _showAddMemberDialog =
-        MutableStateFlow(false)
-
-    val showAddMemberDialog: StateFlow<Boolean> =
-        _showAddMemberDialog.asStateFlow()
-
-    fun toggleAddMemberDialog(show: Boolean) {
-        _showAddMemberDialog.value = show
-    }
-
-    /**
-     * إضافة فرد جديد للعائلة.
-     *
-     * يمكن استخدام هذه الدالة من شاشة إضافة أفراد العائلة.
-     *
-     * friendCount:
-     * عدد الأصدقاء المقربين الموجودين حاليًا.
-     *
-     * يسمح النظام بحد أقصى 3 أصدقاء مقربين.
-     */
-    fun addFamilyMember(
-        name: String,
-        phone: String,
-        email: String,
-        role: FamilyRole
-    ) {
-        if (name.trim().isEmpty()) return
-
-        viewModelScope.launch {
-
-            // ----------------------------------------------------
-            // منع إضافة أكثر من 3 أصدقاء مقربين
-            // ----------------------------------------------------
-
-            if (role == FamilyRole.CLOSE_FRIEND) {
-
-                val currentFriends =
-                    familyMembers.value.count {
-                        it.role == FamilyRole.CLOSE_FRIEND
-                    }
-
-                if (currentFriends >= 3) {
-                    return@launch
-                }
-            }
-
-            val familyId =
-                currentFamily.value?.id
-                    ?: repository.defaultFamilyId
-
-            val newMember =
-                UserEntity(
-                    id = "usr_${UUID.randomUUID()}",
-                    name = name.trim(),
-                    phone = phone.trim(),
-                    email = email.trim(),
-                    role = role,
-                    familyId = familyId,
-
-                    batteryLevel = 100,
-                    isCharging = false,
-                    isInsideHome = true,
-                    currentPlaceName = "غير محدد",
-
-                    isLocationSharingEnabled = true,
-
-                    speedKmh = 0f,
-                    movementDirection = "شمال",
-
-                    latitude = 24.7136,
-                    longitude = 46.6753,
-
-                    isOnline = false
-                )
-
-            repository.insertUser(newMember)
-
-            repository.insertEventLog(
-                EventLogEntity(
-                    familyId = familyId,
-                    userId = repository.currentUserId,
-                    userName =
-                        currentUser.value?.name ?: "مدير العائلة",
-                    eventType = "MEMBER_ADDED",
-                    title = "إضافة فرد جديد",
-                    description =
-                        "تمت إضافة ${newMember.name} إلى العائلة بصفة ${role.labelAr}.",
-                    severity = EventSeverity.INFO
-                )
-            )
-
-            _showAddMemberDialog.value = false
-        }
-    }
-
-    // ============================================================
-    // DELETE MEMBER
-    // ============================================================
-
-    private val _showDeleteMemberDialog =
-        MutableStateFlow(false)
-
-    val showDeleteMemberDialog: StateFlow<Boolean> =
-        _showDeleteMemberDialog.asStateFlow()
-
-    private val _memberPendingDeletion =
-        MutableStateFlow<UserEntity?>(null)
-
-    val memberPendingDeletion: StateFlow<UserEntity?> =
-        _memberPendingDeletion.asStateFlow()
-
-    /**
-     * فتح نافذة تأكيد حذف العضو.
-     *
-     * لا يتم الحذف مباشرة حتى لا يتم حذف فرد بالخطأ.
-     */
-    fun requestDeleteMember(member: UserEntity) {
-
-        // لا يسمح بحذف مالك/مدير العائلة
-        if (member.id == repository.currentUserId) {
-            return
-        }
-
-        _memberPendingDeletion.value = member
-        _showDeleteMemberDialog.value = true
-    }
-
-    fun cancelDeleteMember() {
-        _memberPendingDeletion.value = null
-        _showDeleteMemberDialog.value = false
-    }
-
-    /**
-     * تنفيذ الحذف بعد تأكيد المستخدم.
-     */
-    fun confirmDeleteMember() {
-
-        viewModelScope.launch {
-
-            val member =
-                _memberPendingDeletion.value
-                    ?: return@launch
-
-            // حماية إضافية
-            if (member.id == repository.currentUserId) {
-                cancelDeleteMember()
-                return@launch
-            }
-
-            repository.deleteUser(member.id)
-
-            repository.insertEventLog(
-                EventLogEntity(
-                    familyId = member.familyId,
-                    userId = repository.currentUserId,
-                    userName =
-                        currentUser.value?.name ?: "مدير العائلة",
-                    eventType = "MEMBER_REMOVED",
-                    title = "حذف فرد من العائلة",
-                    description =
-                        "تم حذف ${member.name} (${member.role.labelAr}) من العائلة.",
-                    severity = EventSeverity.WARNING
-                )
-            )
-
-            if (_selectedMemberId.value == member.id) {
-                _selectedMemberId.value = null
-            }
-
-            _memberPendingDeletion.value = null
-            _showDeleteMemberDialog.value = false
-        }
-    }
-
-    // ============================================================
-    // LOCATION / HISTORY
-    // ============================================================
-
-    fun toggleLocationSharing(enabled: Boolean) {
-
-        viewModelScope.launch {
-
-            val user =
-                currentUser.value
-                    ?: return@launch
-
-            repository.toggleLocationSharing(
-                user.id,
-                enabled
-            )
-
-            repository.insertEventLog(
-                EventLogEntity(
-                    familyId = repository.defaultFamilyId,
-                    userId = user.id,
-                    userName = user.name,
-                    eventType = "PRIVACY_UPDATE",
-                    title =
-                        if (enabled)
-                            "تفعيل مشاركة الموقع"
-                        else
-                            "إيقاف مشاركة الموقع",
-                    description =
-                        if (enabled)
-                            "قام ${user.name} بتفعيل مشاركة الموقع."
-                        else
-                            "قام ${user.name} بإيقاف مشاركة الموقع مؤقتاً.",
-                    severity = EventSeverity.WARNING
-                )
-            )
-        }
-    }
 
     // ============================================================
     // SOS
@@ -323,20 +192,347 @@ class FamilyGuardianViewModel(
     val showSosDialog: StateFlow<Boolean> =
         _showSosDialog.asStateFlow()
 
+    // ============================================================
+    // QR
+    // ============================================================
+
+    private val _showQrDialog =
+        MutableStateFlow(false)
+
+    val showQrDialog: StateFlow<Boolean> =
+        _showQrDialog.asStateFlow()
+
+    // ============================================================
+    // ADD PLACE
+    // ============================================================
+
+    private val _showAddPlaceDialog =
+        MutableStateFlow(false)
+
+    val showAddPlaceDialog: StateFlow<Boolean> =
+        _showAddPlaceDialog.asStateFlow()
+
+    // ============================================================
+    // START TRIP
+    // ============================================================
+
+    private val _showStartTripDialog =
+        MutableStateFlow(false)
+
+    val showStartTripDialog: StateFlow<Boolean> =
+        _showStartTripDialog.asStateFlow()
+
+    // ============================================================
+    // ADD MEMBER
+    // ============================================================
+
+    private val _showAddMemberDialog =
+        MutableStateFlow(false)
+
+    val showAddMemberDialog: StateFlow<Boolean> =
+        _showAddMemberDialog.asStateFlow()
+
+    // ============================================================
+    // DELETE MEMBER
+    // ============================================================
+
+    private val _showDeleteMemberDialog =
+        MutableStateFlow(false)
+
+    val showDeleteMemberDialog: StateFlow<Boolean> =
+        _showDeleteMemberDialog.asStateFlow()
+
+    private val _memberToDelete =
+        MutableStateFlow<UserEntity?>(null)
+
+    val memberToDelete: StateFlow<UserEntity?> =
+        _memberToDelete.asStateFlow()
+
+    // ============================================================
+    // OPERATION MESSAGE
+    // ============================================================
+
+    private val _operationMessage =
+        MutableStateFlow<String?>(null)
+
+    val operationMessage: StateFlow<String?> =
+        _operationMessage.asStateFlow()
+
+    // ============================================================
+    // HISTORY FILTER
+    // ============================================================
+
+    private val _selectedHistoryFilter =
+        MutableStateFlow("DAY")
+
+    val selectedHistoryFilter: StateFlow<String> =
+        _selectedHistoryFilter.asStateFlow()
+
+    // ============================================================
+    // LIVE SIMULATION
+    // ============================================================
+
+    private val _isLiveSimulationRunning =
+        MutableStateFlow(false)
+
+    val isLiveSimulationRunning:
+        StateFlow<Boolean> =
+        _isLiveSimulationRunning.asStateFlow()
+
+    private var simulationJob: Job? = null
+
+    // ============================================================
+    // INITIALIZATION
+    // ============================================================
+
+    init {
+
+        viewModelScope.launch {
+
+            repository.seedDatabaseIfEmpty()
+
+            /*
+             * لا نشغل محاكاة الموقع تلقائياً.
+             *
+             * لأن التطبيق أصبح مخصصاً لإضافة أفراد حقيقيين
+             * بدلاً من الأشخاص التجريبيين.
+             */
+            _isLiveSimulationRunning.value = false
+        }
+    }
+
+    // ============================================================
+    // TAB
+    // ============================================================
+
+    fun setTab(index: Int) {
+        _selectedTab.value = index
+    }
+
+    // ============================================================
+    // MEMBER SELECTION
+    // ============================================================
+
+    fun selectMember(memberId: String?) {
+        _selectedMemberId.value = memberId
+    }
+
+    // ============================================================
+    // HISTORY
+    // ============================================================
+
+    fun setHistoryFilter(filter: String) {
+        _selectedHistoryFilter.value = filter
+    }
+
+    // ============================================================
+    // SOS DIALOG
+    // ============================================================
+
     fun toggleSosDialog(show: Boolean) {
         _showSosDialog.value = show
     }
+
+    // ============================================================
+    // QR DIALOG
+    // ============================================================
+
+    fun toggleQrDialog(show: Boolean) {
+        _showQrDialog.value = show
+    }
+
+    // ============================================================
+    // ADD PLACE DIALOG
+    // ============================================================
+
+    fun toggleAddPlaceDialog(show: Boolean) {
+        _showAddPlaceDialog.value = show
+    }
+
+    // ============================================================
+    // START TRIP DIALOG
+    // ============================================================
+
+    fun toggleStartTripDialog(show: Boolean) {
+        _showStartTripDialog.value = show
+    }
+
+    // ============================================================
+    // ADD MEMBER DIALOG
+    // ============================================================
+
+    fun toggleAddMemberDialog(show: Boolean) {
+        _showAddMemberDialog.value = show
+    }
+
+    // ============================================================
+    // DELETE MEMBER DIALOG
+    // ============================================================
+
+    fun showDeleteMemberDialog(member: UserEntity) {
+
+        _memberToDelete.value = member
+
+        _showDeleteMemberDialog.value = true
+    }
+
+    fun hideDeleteMemberDialog() {
+
+        _memberToDelete.value = null
+
+        _showDeleteMemberDialog.value = false
+    }
+
+    // ============================================================
+    // CLEAR MESSAGE
+    // ============================================================
+
+    fun clearOperationMessage() {
+        _operationMessage.value = null
+    }
+
+    // ============================================================
+    // ADD FAMILY MEMBER
+    // ============================================================
+
+    fun addFamilyMember(
+        name: String,
+        phone: String,
+        email: String,
+        role: FamilyRole
+    ) {
+
+        viewModelScope.launch {
+
+            val cleanName =
+                name.trim()
+
+            val cleanPhone =
+                phone.trim()
+
+            val cleanEmail =
+                email.trim()
+
+            if (cleanName.isBlank()) {
+
+                _operationMessage.value =
+                    "يرجى إدخال اسم الفرد."
+
+                return@launch
+            }
+
+            /*
+             * السماح للهاتف والبريد الإلكتروني
+             * بأن يكونا فارغين، لكن عند إدخالهما
+             * سيتم التحقق من عدم التكرار داخل Repository.
+             */
+
+            val success =
+                repository.addFamilyMember(
+                    name = cleanName,
+                    phone = cleanPhone,
+                    email = cleanEmail,
+                    role = role
+                )
+
+            if (success) {
+
+                _operationMessage.value =
+                    "تمت إضافة $cleanName إلى العائلة بنجاح."
+
+                _showAddMemberDialog.value = false
+
+            } else {
+
+                _operationMessage.value =
+                    when (role) {
+
+                        FamilyRole.CLOSE_FRIEND ->
+                            "تعذر الإضافة. الحد الأقصى للأصدقاء المقربين هو 3."
+
+                        else ->
+                            "تعذر إضافة الفرد. قد يكون رقم الهاتف أو البريد الإلكتروني مستخدماً بالفعل."
+                    }
+            }
+        }
+    }
+
+    // ============================================================
+    // DELETE FAMILY MEMBER
+    // ============================================================
+
+    fun deleteFamilyMember(
+        member: UserEntity
+    ) {
+
+        viewModelScope.launch {
+
+            /*
+             * منع حذف المستخدم الحالي من الواجهة.
+             */
+            if (member.id == repository.currentUserId) {
+
+                _operationMessage.value =
+                    "لا يمكن حذف مدير العائلة."
+
+                hideDeleteMemberDialog()
+
+                return@launch
+            }
+
+            val success =
+                repository.deleteFamilyMember(
+                    userId = member.id
+                )
+
+            if (success) {
+
+                if (_selectedMemberId.value == member.id) {
+                    _selectedMemberId.value = null
+                }
+
+                _operationMessage.value =
+                    "تم حذف ${member.name} من العائلة."
+
+            } else {
+
+                _operationMessage.value =
+                    "تعذر حذف ${member.name}. قد يكون مدير العائلة."
+
+            }
+
+            hideDeleteMemberDialog()
+        }
+    }
+
+    // ============================================================
+    // DELETE SELECTED MEMBER
+    // ============================================================
+
+    fun deleteSelectedMember() {
+
+        val member =
+            _memberToDelete.value
+                ?: return
+
+        deleteFamilyMember(member)
+    }
+
+    // ============================================================
+    // SOS
+    // ============================================================
 
     fun triggerSosAlert() {
 
         viewModelScope.launch {
 
+            _isSosActive.value = true
+
+            _showSosDialog.value = true
+
             val user =
                 currentUser.value
                     ?: return@launch
-
-            _isSosActive.value = true
-            _showSosDialog.value = true
 
             repository.sendSosAlert(
                 userId = user.id,
@@ -349,63 +545,134 @@ class FamilyGuardianViewModel(
     }
 
     fun cancelSosAlert() {
+
         _isSosActive.value = false
+
         _showSosDialog.value = false
     }
 
     // ============================================================
-    // QR / INVITATION
+    // LOCATION SHARING
     // ============================================================
 
-    private val _showQrDialog =
-        MutableStateFlow(false)
+    fun toggleLocationSharing(
+        enabled: Boolean
+    ) {
 
-    val showQrDialog: StateFlow<Boolean> =
-        _showQrDialog.asStateFlow()
+        viewModelScope.launch {
 
-    fun toggleQrDialog(show: Boolean) {
-        _showQrDialog.value = show
-    }
+            val user =
+                currentUser.value
+                    ?: return@launch
 
-    /**
-     * إنشاء رمز دعوة جديد للعائلة.
-     *
-     * لا يغير هوية العائلة.
-     */
-    fun generateFamilyInviteCode(): String {
-
-        val code =
-            "FG-" +
-                    UUID.randomUUID()
-                        .toString()
-                        .replace("-", "")
-                        .take(6)
-                        .uppercase()
-
-        return code
-    }
-
-    // ============================================================
-    // PLACES
-    // ============================================================
-
-    val places: StateFlow<List<PlaceEntity>> =
-        repository.getPlaces()
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(5000),
-                emptyList()
+            repository.toggleLocationSharing(
+                user.id,
+                enabled
             )
 
-    private val _showAddPlaceDialog =
-        MutableStateFlow(false)
+            repository.insertEventLog(
+                EventLogEntity(
+                    familyId =
+                        repository.defaultFamilyId,
 
-    val showAddPlaceDialog: StateFlow<Boolean> =
-        _showAddPlaceDialog.asStateFlow()
+                    userId =
+                        user.id,
 
-    fun toggleAddPlaceDialog(show: Boolean) {
-        _showAddPlaceDialog.value = show
+                    userName =
+                        user.name,
+
+                    eventType =
+                        "PRIVACY_UPDATE",
+
+                    title =
+                        if (enabled)
+                            "تفعيل مشاركة الموقع"
+                        else
+                            "إيقاف مشاركة الموقع",
+
+                    description =
+                        if (enabled)
+                            "قام ${user.name} بتفعيل مشاركة الموقع."
+                        else
+                            "قام ${user.name} بإيقاف مشاركة الموقع.",
+
+                    severity =
+                        EventSeverity.WARNING
+                )
+            )
+        }
     }
+
+    // ============================================================
+    // DARK MODE
+    // ============================================================
+
+    fun toggleDarkMode(
+        enabled: Boolean
+    ) {
+
+        viewModelScope.launch {
+
+            val current =
+                userSettings.value
+                    ?: UserSettingsEntity()
+
+            repository.updateUserSettings(
+                current.copy(
+                    isDarkMode = enabled
+                )
+            )
+        }
+    }
+
+    // ============================================================
+    // LANGUAGE
+    // ============================================================
+
+    fun toggleLanguage(
+        lang: String
+    ) {
+
+        viewModelScope.launch {
+
+            val current =
+                userSettings.value
+                    ?: UserSettingsEntity()
+
+            repository.updateUserSettings(
+                current.copy(
+                    language = lang
+                )
+            )
+        }
+    }
+
+    // ============================================================
+    // UPDATE INTERVAL
+    // ============================================================
+
+    fun updateUpdateInterval(
+        seconds: Int
+    ) {
+
+        viewModelScope.launch {
+
+            val current =
+                userSettings.value
+                    ?: UserSettingsEntity()
+
+            repository.updateUserSettings(
+                current.copy(
+                    updateIntervalSeconds =
+                        seconds.coerceAtLeast(1)
+                )
+            )
+        }
+    }
+
+    // ============================================================
+    // ADD PLACE
+    // ============================================================
 
     fun addPlace(
         name: String,
@@ -420,39 +687,52 @@ class FamilyGuardianViewModel(
             val place =
                 PlaceEntity(
                     id =
-                        "place_${UUID.randomUUID()}"
-                            .take(18),
+                        "place_${UUID.randomUUID()}",
 
                     familyId =
                         repository.defaultFamilyId,
 
-                    name = name,
+                    name =
+                        name.trim(),
 
-                    placeType = type,
+                    placeType =
+                        type,
 
-                    latitude = lat,
-                    longitude = lng,
+                    latitude =
+                        lat,
 
-                    radiusMeters = radius,
+                    longitude =
+                        lng,
 
-                    enterNotify = true,
-                    exitNotify = true
+                    radiusMeters =
+                        radius.coerceAtLeast(50)
                 )
 
             repository.insertPlace(place)
 
             repository.insertEventLog(
                 EventLogEntity(
-                    familyId = repository.defaultFamilyId,
-                    userId = repository.currentUserId,
+                    familyId =
+                        repository.defaultFamilyId,
+
+                    userId =
+                        repository.currentUserId,
+
                     userName =
                         currentUser.value?.name
                             ?: "مدير العائلة",
-                    eventType = "PLACE_ADDED",
-                    title = "إضافة مكان جديد",
+
+                    eventType =
+                        "PLACE_ADDED",
+
+                    title =
+                        "إضافة مكان جديد",
+
                     description =
-                        "تمت إضافة المكان: $name.",
-                    severity = EventSeverity.INFO
+                        "تمت إضافة المكان ($name) إلى قائمة الأماكن المهمة.",
+
+                    severity =
+                        EventSeverity.INFO
                 )
             )
 
@@ -460,42 +740,26 @@ class FamilyGuardianViewModel(
         }
     }
 
-    fun deletePlace(place: PlaceEntity) {
+    // ============================================================
+    // DELETE PLACE
+    // ============================================================
+
+    fun deletePlace(
+        place: PlaceEntity
+    ) {
 
         viewModelScope.launch {
+
             repository.deletePlace(place)
+
+            _operationMessage.value =
+                "تم حذف المكان ${place.name}."
         }
     }
 
     // ============================================================
-    // TRIPS
+    // START TRIP
     // ============================================================
-
-    val activeTrip: StateFlow<TripEntity?> =
-        repository.getActiveTrip()
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(5000),
-                null
-            )
-
-    val allTrips: StateFlow<List<TripEntity>> =
-        repository.getAllTrips()
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(5000),
-                emptyList()
-            )
-
-    private val _showStartTripDialog =
-        MutableStateFlow(false)
-
-    val showStartTripDialog: StateFlow<Boolean> =
-        _showStartTripDialog.asStateFlow()
-
-    fun toggleStartTripDialog(show: Boolean) {
-        _showStartTripDialog.value = show
-    }
 
     fun startTrip(
         destName: String,
@@ -514,8 +778,11 @@ class FamilyGuardianViewModel(
                     id =
                         "trip_${UUID.randomUUID()}",
 
-                    userId = user.id,
-                    userName = user.name,
+                    userId =
+                        user.id,
+
+                    userName =
+                        user.name,
 
                     startLocationName =
                         user.currentPlaceName,
@@ -541,9 +808,14 @@ class FamilyGuardianViewModel(
                     currentLongitude =
                         user.longitude,
 
-                    etaMinutes = 15,
-                    progressPercent = 0,
-                    isCompleted = false
+                    etaMinutes =
+                        15,
+
+                    progressPercent =
+                        0,
+
+                    isCompleted =
+                        false
                 )
 
             repository.insertTrip(trip)
@@ -553,9 +825,11 @@ class FamilyGuardianViewModel(
                     familyId =
                         repository.defaultFamilyId,
 
-                    userId = user.id,
+                    userId =
+                        user.id,
 
-                    userName = user.name,
+                    userName =
+                        user.name,
 
                     eventType =
                         "TRIP_STARTED",
@@ -564,7 +838,7 @@ class FamilyGuardianViewModel(
                         "بدء رحلة جديدة",
 
                     description =
-                        "بدأ ${user.name} رحلة إلى $destName.",
+                        "بدأ ${user.name} رحلة مباشرة متجهاً إلى $destName.",
 
                     severity =
                         EventSeverity.INFO
@@ -576,192 +850,7 @@ class FamilyGuardianViewModel(
     }
 
     // ============================================================
-    // SETTINGS
-    // ============================================================
-
-    val userSettings:
-            StateFlow<UserSettingsEntity?> =
-        repository.getUserSettings()
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(5000),
-                null
-            )
-
-    fun toggleDarkMode(enabled: Boolean) {
-
-        viewModelScope.launch {
-
-            val current =
-                userSettings.value
-                    ?: UserSettingsEntity()
-
-            repository.updateUserSettings(
-                current.copy(
-                    isDarkMode = enabled
-                )
-            )
-        }
-    }
-
-    fun toggleLanguage(lang: String) {
-
-        viewModelScope.launch {
-
-            val current =
-                userSettings.value
-                    ?: UserSettingsEntity()
-
-            repository.updateUserSettings(
-                current.copy(
-                    language = lang
-                )
-            )
-        }
-    }
-
-    fun updateUpdateInterval(seconds: Int) {
-
-        viewModelScope.launch {
-
-            val current =
-                userSettings.value
-                    ?: UserSettingsEntity()
-
-            repository.updateUserSettings(
-                current.copy(
-                    updateIntervalSeconds =
-                        seconds
-                )
-            )
-        }
-    }
-
-    // ============================================================
-    // HISTORY
-    // ============================================================
-
-    private val _selectedHistoryFilter =
-        MutableStateFlow("DAY")
-
-    val selectedHistoryFilter:
-            StateFlow<String> =
-        _selectedHistoryFilter.asStateFlow()
-
-    fun setHistoryFilter(filter: String) {
-        _selectedHistoryFilter.value = filter
-    }
-
-    // ============================================================
-    // SHARE APPLICATION
-    // ============================================================
-
-    /**
-     * الرابط الذي سيتم استخدامه لاحقاً
-     * في زر مشاركة التطبيق.
-     *
-     * غيّره لاحقاً إلى رابط Google Play الحقيقي.
-     */
-    val applicationShareUrl:
-            String =
-        "https://play.google.com/store/apps/details?id=com.example.familyguardian"
-
-    /**
-     * النص الجاهز للمشاركة.
-     */
-    val applicationShareText:
-            String
-        get() =
-            """
-            🏠 Family Guardian
-            
-            تطبيق لمتابعة أفراد العائلة ومشاركة الموقع
-            وتنبيهات الأمان والأماكن المهمة.
-            
-            حمّل التطبيق من الرابط:
-            $applicationShareUrl
-            """.trimIndent()
-
-    // ============================================================
-    // SUBSCRIPTION FOUNDATION
-    // ============================================================
-
-    /**
-     * هذه مجرد بنية أولية للاشتراكات.
-     *
-     * الدفع الفعلي سيتم ربطه لاحقاً بـ:
-     * Google Play Billing
-     * أو نظام دفع خارجي حسب السوق المستهدف.
-     */
-
-    enum class SubscriptionPlan {
-        FREE,
-        MONTHLY,
-        YEARLY
-    }
-
-    private val _subscriptionPlan =
-        MutableStateFlow(
-            SubscriptionPlan.FREE
-        )
-
-    val subscriptionPlan:
-            StateFlow<SubscriptionPlan> =
-        _subscriptionPlan.asStateFlow()
-
-    private val _subscriptionActive =
-        MutableStateFlow(false)
-
-    val subscriptionActive:
-            StateFlow<Boolean> =
-        _subscriptionActive.asStateFlow()
-
-    fun setSubscriptionPlan(
-        plan: SubscriptionPlan
-    ) {
-
-        _subscriptionPlan.value = plan
-
-        _subscriptionActive.value =
-            plan != SubscriptionPlan.FREE
-    }
-
-    fun isPremiumFeatureAvailable():
-            Boolean {
-
-        return subscriptionActive.value
-    }
-
-    // ============================================================
     // LIVE SIMULATION
-    // ============================================================
-
-    private val _isLiveSimulationRunning =
-        MutableStateFlow(true)
-
-    val isLiveSimulationRunning:
-            StateFlow<Boolean> =
-        _isLiveSimulationRunning.asStateFlow()
-
-    private var simulationJob:
-            Job? = null
-
-    // ============================================================
-    // INITIALIZATION
-    // ============================================================
-
-    init {
-
-        viewModelScope.launch {
-
-            repository.seedDatabaseIfEmpty()
-
-            startLiveLocationSimulation()
-        }
-    }
-
-    // ============================================================
-    // LIVE LOCATION SIMULATION
     // ============================================================
 
     fun toggleLiveSimulation() {
@@ -788,9 +877,7 @@ class FamilyGuardianViewModel(
 
                 var step = 0
 
-                while (
-                    _isLiveSimulationRunning.value
-                ) {
+                while (_isLiveSimulationRunning.value) {
 
                     val interval =
                         userSettings.value
@@ -803,92 +890,84 @@ class FamilyGuardianViewModel(
 
                     step++
 
-                    // ------------------------------------------------
-                    // المحاكاة الآن تعتمد على أول ابن موجود
-                    // بدلاً من الاعتماد الدائم على usr_003
-                    // ------------------------------------------------
+                    /*
+                     * المحاكاة أصبحت اختيارية.
+                     *
+                     * لا يتم إنشاء فرد افتراضي.
+                     *
+                     * إذا أراد المطور اختبار المحاكاة،
+                     * يتم تطبيقها فقط على عضو حقيقي
+                     * تم اختياره من القائمة.
+                     */
 
-                    val simulatedMember =
-                        familyMembers.value
-                            .firstOrNull {
-                                it.role ==
-                                        FamilyRole.SON
-                            }
-                            ?: familyMembers.value
-                                .firstOrNull()
+                    val selectedId =
+                        _selectedMemberId.value
 
-                    if (simulatedMember == null) {
-                        continue
-                    }
+                    if (selectedId != null) {
 
-                    val baseLat =
-                        24.7136
+                        val member =
+                            familyMembers.value
+                                .firstOrNull {
+                                    it.id == selectedId
+                                }
 
-                    val baseLng =
-                        46.6753
+                        if (member != null) {
 
-                    val memberLat =
-                        baseLat +
-                                0.015 +
-                                (
-                                    Math.sin(
-                                        step * 0.2
-                                    ) * 0.003
-                                )
+                            val baseLat =
+                                member.latitude
 
-                    val memberLng =
-                        baseLng +
-                                0.012 +
-                                (
-                                    Math.cos(
-                                        step * 0.2
-                                    ) * 0.003
-                                )
+                            val baseLng =
+                                member.longitude
 
-                    val memberSpeed =
-                        if (step % 4 == 0) {
-                            0f
-                        } else {
-                            30f +
+                            val newLat =
+                                baseLat +
                                     (
-                                        step % 20
+                                        kotlin.math.sin(
+                                            step * 0.2
+                                        ) * 0.0005
                                     )
+
+                            val newLng =
+                                baseLng +
+                                    (
+                                        kotlin.math.cos(
+                                            step * 0.2
+                                        ) * 0.0005
+                                    )
+
+                            val speed =
+                                if (step % 4 == 0)
+                                    0f
+                                else
+                                    20f +
+                                        (step % 15)
+
+                            val battery =
+                                (
+                                    member.batteryLevel - 1
+                                ).coerceAtLeast(5)
+
+                            repository.updateMemberLocation(
+                                userId =
+                                    member.id,
+
+                                lat =
+                                    newLat,
+
+                                lng =
+                                    newLng,
+
+                                speed =
+                                    speed,
+
+                                battery =
+                                    battery,
+
+                                placeName =
+                                    member.currentPlaceName
+                            )
+                        }
                     }
-
-                    val memberBattery =
-                        (
-                            simulatedMember
-                                .batteryLevel -
-                                    (step / 10)
-                        )
-                            .coerceAtLeast(10)
-
-                    repository.updateMemberLocation(
-
-                        userId =
-                            simulatedMember.id,
-
-                        lat =
-                            memberLat,
-
-                        lng =
-                            memberLng,
-
-                        speed =
-                            memberSpeed,
-
-                        battery =
-                            memberBattery,
-
-                        placeName =
-                            if (
-                                memberSpeed == 0f
-                            ) {
-                                "الموقع الحالي"
-                            } else {
-                                "في الطريق"
-                            }
-                    )
                 }
             }
     }
