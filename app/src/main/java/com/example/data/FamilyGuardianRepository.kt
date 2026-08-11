@@ -15,13 +15,8 @@ class FamilyGuardianRepository(
 
     val currentUserId = "usr_001"
 
-    private val defaultFamilyName = "عائلتي"
-
-    // الحد الأقصى للأصدقاء المقربين
-    private val maxCloseFriends = 3
-
     // ============================================================
-    // OBSERVABLE DATA
+    // FAMILY MEMBERS
     // ============================================================
 
     fun getFamilyMembers(
@@ -39,20 +34,36 @@ class FamilyGuardianRepository(
     ): Flow<FamilyEntity?> =
         dao.getFamily(familyId)
 
+    // ============================================================
+    // PLACES
+    // ============================================================
+
     fun getPlaces(
         familyId: String = defaultFamilyId
     ): Flow<List<PlaceEntity>> =
         dao.getPlaces(familyId)
+
+    // ============================================================
+    // EVENTS
+    // ============================================================
 
     fun getEventLogs(
         familyId: String = defaultFamilyId
     ): Flow<List<EventLogEntity>> =
         dao.getEventLogs(familyId)
 
+    // ============================================================
+    // LOCATION HISTORY
+    // ============================================================
+
     fun getLocationHistory(
         userId: String
     ): Flow<List<LocationHistoryEntity>> =
         dao.getLocationHistoryForUser(userId)
+
+    // ============================================================
+    // TRIPS
+    // ============================================================
 
     fun getActiveTrip(
         userId: String = currentUserId
@@ -62,25 +73,14 @@ class FamilyGuardianRepository(
     fun getAllTrips(): Flow<List<TripEntity>> =
         dao.getAllTrips()
 
+    // ============================================================
+    // SETTINGS
+    // ============================================================
+
     fun getUserSettings(
         userId: String = "current_user"
     ): Flow<UserSettingsEntity?> =
         dao.getUserSettings(userId)
-
-    // ============================================================
-    // FAMILY
-    // ============================================================
-
-    suspend fun insertFamily(
-        family: FamilyEntity
-    ) {
-        dao.insertFamily(family)
-    }
-
-    suspend fun getFamilySync(
-        familyId: String = defaultFamilyId
-    ): FamilyEntity? =
-        dao.getFamilySync(familyId)
 
     // ============================================================
     // ADD FAMILY MEMBER
@@ -89,185 +89,124 @@ class FamilyGuardianRepository(
     /**
      * إضافة فرد جديد للعائلة.
      *
-     * يمكن استخدام هذه الدالة للأب، الأم، الجد، الجدة،
-     * الأخ، الأخت، الابن، البنت، الحفيد، الحفيدة،
-     * ابن العم، ابن الخال، الأصدقاء وغيرهم.
+     * النتيجة:
+     * true  = تمت الإضافة
+     * false = لم تتم الإضافة
+     *
+     * يمنع:
+     * - تكرار رقم الهاتف
+     * - تكرار البريد الإلكتروني
+     * - إضافة أكثر من 3 أصدقاء مقربين
      */
     suspend fun addFamilyMember(
         name: String,
-        phone: String = "",
-        email: String = "",
+        phone: String,
+        email: String,
         role: FamilyRole,
         avatarUrl: String = "",
-        locationSharingEnabled: Boolean = true
-    ): Result<UserEntity> {
+        familyId: String = defaultFamilyId
+    ): Boolean {
 
         val cleanName = name.trim()
+        val cleanPhone = phone.trim()
+        val cleanEmail = email.trim()
 
-        if (cleanName.isEmpty()) {
-            return Result.failure(
-                IllegalArgumentException("اسم فرد العائلة مطلوب")
-            )
+        // --------------------------------------------
+        // التحقق من البيانات الأساسية
+        // --------------------------------------------
+
+        if (cleanName.isBlank()) {
+            return false
         }
 
-        // --------------------------------------------------------
-        // التحقق من وجود العائلة
-        // --------------------------------------------------------
+        // --------------------------------------------
+        // منع تكرار العضو
+        // --------------------------------------------
 
-        val family = dao.getFamilySync(defaultFamilyId)
+        val alreadyExists = dao.memberAlreadyExists(
+            familyId = familyId,
+            phone = cleanPhone,
+            email = cleanEmail
+        )
 
-        if (family == null) {
-            return Result.failure(
-                IllegalStateException("العائلة غير موجودة")
-            )
+        if (alreadyExists > 0) {
+            return false
         }
 
-        // --------------------------------------------------------
-        // منع تجاوز عدد الأصدقاء المقربين
-        // --------------------------------------------------------
+        // --------------------------------------------
+        // الحد الأقصى للأصدقاء المقربين = 3
+        // --------------------------------------------
 
         if (role == FamilyRole.CLOSE_FRIEND) {
 
-            val currentMembers =
-                dao.getFamilyMembers(defaultFamilyId)
+            val friendsCount =
+                dao.getCloseFriendsCount(familyId)
 
-            /*
-             * لأن getFamilyMembers يعيد Flow،
-             * نستخدم first() للحصول على الحالة الحالية.
-             */
-            val members = currentMembers.first()
-
-            val closeFriendsCount =
-                members.count {
-                    it.role == FamilyRole.CLOSE_FRIEND
-                }
-
-            if (closeFriendsCount >= maxCloseFriends) {
-                return Result.failure(
-                    IllegalStateException(
-                        "لا يمكن إضافة أكثر من 3 أصدقاء مقربين"
-                    )
-                )
+            if (friendsCount >= 3) {
+                return false
             }
         }
 
-        // --------------------------------------------------------
-        // إنشاء معرف فريد
-        // --------------------------------------------------------
+        // --------------------------------------------
+        // إنشاء معرف جديد
+        // --------------------------------------------
 
-        val userId =
-            "usr_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+        val newUserId =
+            "usr_${UUID.randomUUID().toString().take(8)}"
 
-        // --------------------------------------------------------
+        // --------------------------------------------
         // إنشاء العضو
-        // --------------------------------------------------------
+        // --------------------------------------------
 
-        val user = UserEntity(
-            id = userId,
+        val newMember = UserEntity(
+            id = newUserId,
             name = cleanName,
-            phone = phone.trim(),
-            email = email.trim(),
+            phone = cleanPhone,
+            email = cleanEmail,
             role = role,
             avatarUrl = avatarUrl,
-            familyId = defaultFamilyId,
+            familyId = familyId,
+
             batteryLevel = 100,
             isCharging = false,
+
             isInsideHome = true,
-            currentPlaceName = "المنزل",
-            isLocationSharingEnabled = locationSharingEnabled,
+            currentPlaceName = "غير محدد",
+
+            isLocationSharingEnabled = false,
+
             speedKmh = 0f,
-            movementDirection = "شمال",
+            movementDirection = "غير محدد",
+
             latitude = 24.7136,
             longitude = 46.6753,
+
+            lastUpdated = System.currentTimeMillis(),
+
             isOnline = false
         )
 
-        dao.insertUser(user)
+        dao.insertUser(newMember)
 
-        // --------------------------------------------------------
+        // --------------------------------------------
         // تسجيل العملية
-        // --------------------------------------------------------
+        // --------------------------------------------
 
         dao.insertEventLog(
             EventLogEntity(
-                familyId = defaultFamilyId,
-                userId = currentUserId,
-                userName = "مدير العائلة",
-                eventType = "FAMILY_MEMBER_ADDED",
-                title = "إضافة فرد للعائلة",
+                familyId = familyId,
+                userId = newUserId,
+                userName = cleanName,
+                eventType = "MEMBER_ADDED",
+                title = "إضافة فرد جديد",
                 description =
-                    "تمت إضافة $cleanName (${role.labelAr}) إلى العائلة.",
+                    "تمت إضافة $cleanName إلى العائلة " +
+                    "بصفة ${role.labelAr}.",
                 severity = EventSeverity.INFO
             )
         )
 
-        return Result.success(user)
-    }
-
-    // ============================================================
-    // UPDATE FAMILY MEMBER
-    // ============================================================
-
-    /**
-     * تحديث بيانات أحد أفراد العائلة.
-     */
-    suspend fun updateFamilyMember(
-        user: UserEntity
-    ): Result<Unit> {
-
-        val existing =
-            dao.getUserByIdSync(user.id)
-
-        if (existing == null) {
-            return Result.failure(
-                IllegalArgumentException(
-                    "فرد العائلة غير موجود"
-                )
-            )
-        }
-
-        // لا نسمح بتغيير العائلة المرتبط بها العضو
-        if (existing.familyId != defaultFamilyId) {
-            return Result.failure(
-                IllegalStateException(
-                    "لا يمكن تعديل عضو خارج العائلة الحالية"
-                )
-            )
-        }
-
-        // مدير العائلة لا يتم تغيير دوره بهذه الطريقة
-        val family =
-            dao.getFamilySync(defaultFamilyId)
-
-        if (
-            family != null &&
-            family.adminUserId == user.id &&
-            user.role != FamilyRole.FATHER &&
-            user.role != FamilyRole.GUARDIAN
-        ) {
-            return Result.failure(
-                IllegalStateException(
-                    "لا يمكن تغيير دور مدير العائلة بهذه الطريقة"
-                )
-            )
-        }
-
-        dao.updateUser(user)
-
-        dao.insertEventLog(
-            EventLogEntity(
-                familyId = defaultFamilyId,
-                userId = currentUserId,
-                userName = "مدير العائلة",
-                eventType = "FAMILY_MEMBER_UPDATED",
-                title = "تعديل بيانات فرد العائلة",
-                description =
-                    "تم تعديل بيانات ${user.name}.",
-                severity = EventSeverity.INFO
-            )
-        )
-
-        return Result.success(Unit)
+        return true
     }
 
     // ============================================================
@@ -277,128 +216,160 @@ class FamilyGuardianRepository(
     /**
      * حذف فرد من العائلة.
      *
-     * لا يمكن حذف مدير العائلة.
+     * يمنع حذف مدير العائلة.
+     *
+     * كما يقوم بتنظيف:
+     * - سجل المواقع
+     * - سجل الأحداث
+     * - الرحلات
      */
     suspend fun deleteFamilyMember(
-        userId: String
-    ): Result<Unit> {
+        userId: String,
+        familyId: String = defaultFamilyId
+    ): Boolean {
 
-        if (userId == currentUserId) {
-            return Result.failure(
-                IllegalStateException(
-                    "لا يمكنك حذف حساب مدير العائلة من داخل العائلة"
-                )
-            )
-        }
-
-        val family =
-            dao.getFamilySync(defaultFamilyId)
-
-        if (family == null) {
-            return Result.failure(
-                IllegalStateException(
-                    "العائلة غير موجودة"
-                )
-            )
-        }
-
-        // --------------------------------------------------------
-        // حماية مدير العائلة
-        // --------------------------------------------------------
-
-        if (family.adminUserId == userId) {
-            return Result.failure(
-                IllegalStateException(
-                    "لا يمكن حذف مدير العائلة"
-                )
-            )
-        }
-
-        // --------------------------------------------------------
-        // البحث عن العضو
-        // --------------------------------------------------------
+        // --------------------------------------------
+        // التأكد من أن العضو موجود
+        // --------------------------------------------
 
         val user =
             dao.getUserByIdSync(userId)
+                ?: return false
 
-        if (user == null) {
-            return Result.failure(
-                IllegalArgumentException(
-                    "فرد العائلة غير موجود"
-                )
-            )
+        // --------------------------------------------
+        // حماية مدير العائلة
+        // --------------------------------------------
+
+        val adminId =
+            dao.getFamilyAdminId(familyId)
+
+        if (userId == adminId) {
+            return false
         }
 
-        if (user.familyId != defaultFamilyId) {
-            return Result.failure(
-                IllegalStateException(
-                    "هذا العضو لا ينتمي إلى العائلة الحالية"
-                )
+        // --------------------------------------------
+        // حذف بيانات العضو المرتبطة به
+        // --------------------------------------------
+
+        dao.deleteLocationHistoryForUser(userId)
+
+        dao.deleteEventLogsForUser(userId)
+
+        dao.deleteTripsForUser(userId)
+
+        // --------------------------------------------
+        // حذف العضو نفسه
+        // --------------------------------------------
+
+        val deletedRows =
+            dao.deleteUserSafely(
+                userId = userId,
+                familyId = familyId
             )
+
+        if (deletedRows <= 0) {
+            return false
         }
 
-        // --------------------------------------------------------
-        // حذف العضو وبياناته المرتبطة
-        // --------------------------------------------------------
-
-        dao.deleteUserCompletely(userId)
-
-        // --------------------------------------------------------
+        // --------------------------------------------
         // تسجيل عملية الحذف
-        // --------------------------------------------------------
+        // --------------------------------------------
 
         dao.insertEventLog(
             EventLogEntity(
-                familyId = defaultFamilyId,
-                userId = currentUserId,
-                userName = "مدير العائلة",
-                eventType = "FAMILY_MEMBER_DELETED",
+                familyId = familyId,
+                userId = userId,
+                userName = user.name,
+                eventType = "MEMBER_REMOVED",
                 title = "حذف فرد من العائلة",
                 description =
-                    "تم حذف ${user.name} (${user.role.labelAr}) من العائلة.",
+                    "تم حذف ${user.name} من أفراد العائلة.",
                 severity = EventSeverity.WARNING
             )
         )
 
-        return Result.success(Unit)
+        return true
     }
 
     // ============================================================
-    // FAMILY MEMBERS COUNT
+    // BASIC DATABASE OPERATIONS
     // ============================================================
 
-    suspend fun getFamilyMembersCount(): Int =
-        dao.getFamilyMembersCount(defaultFamilyId)
+    suspend fun insertUser(
+        user: UserEntity
+    ) =
+        dao.insertUser(user)
+
+    suspend fun insertFamily(
+        family: FamilyEntity
+    ) =
+        dao.insertFamily(family)
 
     // ============================================================
-    // CLOSE FRIENDS
+    // PLACES
     // ============================================================
 
-    /**
-     * التحقق من إمكانية إضافة صديق مقرب.
-     */
-    suspend fun canAddCloseFriend(): Boolean {
+    suspend fun insertPlace(
+        place: PlaceEntity
+    ) =
+        dao.insertPlace(place)
 
-        val members =
-            dao.getFamilyMembers(defaultFamilyId).first()
+    suspend fun deletePlace(
+        place: PlaceEntity
+    ) =
+        dao.deletePlace(place)
 
-        val count =
-            members.count {
-                it.role == FamilyRole.CLOSE_FRIEND
-            }
+    // ============================================================
+    // EVENTS
+    // ============================================================
 
-        return count < maxCloseFriends
-    }
+    suspend fun insertEventLog(
+        log: EventLogEntity
+    ) =
+        dao.insertEventLog(log)
 
-    suspend fun getCloseFriendsCount(): Int {
+    suspend fun clearEventLogs(
+        familyId: String = defaultFamilyId
+    ) =
+        dao.clearEventLogs(familyId)
 
-        val members =
-            dao.getFamilyMembers(defaultFamilyId).first()
+    // ============================================================
+    // TRIPS
+    // ============================================================
 
-        return members.count {
-            it.role == FamilyRole.CLOSE_FRIEND
-        }
-    }
+    suspend fun insertTrip(
+        trip: TripEntity
+    ) =
+        dao.insertTrip(trip)
+
+    suspend fun updateTripProgress(
+        tripId: String,
+        lat: Double,
+        lng: Double,
+        progress: Int,
+        eta: Int
+    ) =
+        dao.updateTripProgress(
+            tripId = tripId,
+            lat = lat,
+            lng = lng,
+            progress = progress,
+            eta = eta
+        )
+
+    suspend fun completeTrip(
+        tripId: String
+    ) =
+        dao.completeTrip(tripId)
+
+    // ============================================================
+    // USER SETTINGS
+    // ============================================================
+
+    suspend fun updateUserSettings(
+        settings: UserSettingsEntity
+    ) =
+        dao.insertUserSettings(settings)
 
     // ============================================================
     // LOCATION
@@ -416,6 +387,7 @@ class FamilyGuardianRepository(
         val timestamp =
             System.currentTimeMillis()
 
+        // تحديث آخر موقع
         dao.updateUserLocation(
             userId = userId,
             lat = lat,
@@ -425,9 +397,11 @@ class FamilyGuardianRepository(
             timestamp = timestamp
         )
 
+        // جلب بيانات العضو
         val user =
             dao.getUserByIdSync(userId)
 
+        // إضافة نقطة إلى سجل الحركة
         dao.insertLocationPoint(
             LocationHistoryEntity(
                 userId = userId,
@@ -442,11 +416,14 @@ class FamilyGuardianRepository(
         )
     }
 
+    // ============================================================
+    // LOCATION SHARING
+    // ============================================================
+
     suspend fun toggleLocationSharing(
         userId: String,
         enabled: Boolean
     ) {
-
         dao.updateLocationSharing(
             userId = userId,
             enabled = enabled
@@ -487,129 +464,57 @@ class FamilyGuardianRepository(
     }
 
     // ============================================================
-    // PLACES
-    // ============================================================
-
-    suspend fun insertPlace(
-        place: PlaceEntity
-    ) {
-        dao.insertPlace(place)
-    }
-
-    suspend fun deletePlace(
-        place: PlaceEntity
-    ) {
-        dao.deletePlace(place)
-    }
-
-    // ============================================================
-    // EVENT LOGS
-    // ============================================================
-
-    suspend fun insertEventLog(
-        log: EventLogEntity
-    ) {
-        dao.insertEventLog(log)
-    }
-
-    suspend fun clearEventLogs(
-        familyId: String = defaultFamilyId
-    ) {
-        dao.clearEventLogs(familyId)
-    }
-
-    // ============================================================
-    // TRIPS
-    // ============================================================
-
-    suspend fun insertTrip(
-        trip: TripEntity
-    ) {
-        dao.insertTrip(trip)
-    }
-
-    suspend fun updateTripProgress(
-        tripId: String,
-        lat: Double,
-        lng: Double,
-        progress: Int,
-        eta: Int
-    ) {
-
-        dao.updateTripProgress(
-            tripId = tripId,
-            lat = lat,
-            lng = lng,
-            progress = progress,
-            eta = eta
-        )
-    }
-
-    suspend fun completeTrip(
-        tripId: String
-    ) {
-        dao.completeTrip(tripId)
-    }
-
-    // ============================================================
-    // USER SETTINGS
-    // ============================================================
-
-    suspend fun updateUserSettings(
-        settings: UserSettingsEntity
-    ) {
-        dao.insertUserSettings(settings)
-    }
-
-    // ============================================================
-    // DATABASE SEED
+    // SEED DATABASE
     // ============================================================
 
     /**
-     * إنشاء البيانات الأولية للتطبيق عند أول تشغيل فقط.
+     * ملاحظة مهمة:
      *
-     * مهم:
-     * إذا كانت العائلة موجودة فلن نقوم بإعادة إنشاء
-     * الأشخاص الافتراضيين.
+     * هذه الدالة تحتفظ بالبيانات التجريبية الحالية
+     * حتى لا نكسر التطبيق الحالي.
+     *
+     * لاحقاً يمكن إزالة بيانات Demo بالكامل بعد
+     * إضافة شاشة إنشاء العائلة الأولى.
      */
     suspend fun seedDatabaseIfEmpty() {
 
-        val existingFamily =
-            dao.getFamilySync(defaultFamilyId)
+        val existingMembers =
+            dao.getFamilyMembers(defaultFamilyId)
 
-        if (existingFamily != null) {
+        /*
+         * لا يمكن قراءة Flow مباشرة هنا بطريقة بسيطة،
+         * لذلك نعتمد على وجود المستخدم الحالي.
+         */
+        val currentUser =
+            dao.getUserByIdSync(currentUserId)
+
+        if (currentUser != null) {
             return
         }
 
-        // --------------------------------------------------------
-        // إنشاء العائلة
-        // --------------------------------------------------------
+        // ========================================================
+        // DEFAULT FAMILY
+        // ========================================================
+
+        val baseLat = 24.7136
+        val baseLng = 46.6753
 
         val family =
             FamilyEntity(
                 id = defaultFamilyId,
-                name = defaultFamilyName,
+                name = "عائلتي",
                 inviteCode =
-                    "FG-" +
-                    UUID.randomUUID()
-                        .toString()
-                        .replace("-", "")
-                        .take(6)
-                        .uppercase(),
+                    "FG-${UUID.randomUUID().toString().take(6).uppercase()}",
                 qrCodeData =
-                    "FAMILY_GUARDIAN_JOIN_" +
-                    UUID.randomUUID()
-                        .toString()
-                        .replace("-", "")
-                        .take(8),
+                    "FAMILY_GUARDIAN_JOIN_$defaultFamilyId",
                 adminUserId = currentUserId
             )
 
         dao.insertFamily(family)
 
-        // --------------------------------------------------------
-        // إنشاء مدير العائلة فقط
-        // --------------------------------------------------------
+        // ========================================================
+        // DEFAULT ADMIN
+        // ========================================================
 
         val admin =
             UserEntity(
@@ -619,25 +524,31 @@ class FamilyGuardianRepository(
                 email = "",
                 role = FamilyRole.FATHER,
                 familyId = defaultFamilyId,
+
                 batteryLevel = 100,
                 isCharging = false,
+
                 isInsideHome = true,
                 currentPlaceName = "المنزل",
+
                 isLocationSharingEnabled = true,
+
                 speedKmh = 0f,
                 movementDirection = "شمال",
-                latitude = 24.7136,
-                longitude = 46.6753,
+
+                latitude = baseLat,
+                longitude = baseLng,
+
                 isOnline = true
             )
 
         dao.insertUser(admin)
 
-        // --------------------------------------------------------
-        // الإعدادات الافتراضية
-        // --------------------------------------------------------
+        // ========================================================
+        // DEFAULT SETTINGS
+        // ========================================================
 
-        val settings =
+        dao.insertUserSettings(
             UserSettingsEntity(
                 userId = "current_user",
                 isDarkMode = true,
@@ -647,24 +558,6 @@ class FamilyGuardianRepository(
                 batterySaverEnabled = false,
                 sosAlertsEnabled = true,
                 autoBackupEnabled = true
-            )
-
-        dao.insertUserSettings(settings)
-
-        // --------------------------------------------------------
-        // تسجيل إنشاء العائلة
-        // --------------------------------------------------------
-
-        dao.insertEventLog(
-            EventLogEntity(
-                familyId = defaultFamilyId,
-                userId = currentUserId,
-                userName = admin.name,
-                eventType = "FAMILY_CREATED",
-                title = "إنشاء العائلة",
-                description =
-                    "تم إنشاء عائلة جديدة في Family Guardian.",
-                severity = EventSeverity.INFO
             )
         )
     }
